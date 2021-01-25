@@ -1,0 +1,109 @@
+//I TRIED THIS... SO CAN YOU CHECK THIS? 
+
+
+#include "stm32f4XX.H   ----------HEADER
+//SCL - PB8
+//SDA - PB9    (THIS TWO ARE FOR STM32F411)----PIN
+
+//LED will be blinking using the DS1307 RTC.... 
+#define SLAVE_ADDR  0x68 (FOR DS1307 DATASHEET REFERRED)
+void i2c_init(void)
+int i2c_readbyte(char saddr,char maddr, char* data)
+void delayMs(int n)
+
+
+int main()
+{
+RCC->AHB1ENR |= 1;
+GPIOA->MODER &= ~0X00000C00;
+GPIOA->MODER |= 0X00000400;
+char data;
+while(1)
+{
+i2c_readbyte(SLAVE_ADDR,0,&data);
+
+if(data &1)
+  GPIO->ODR  |=0x00000020;
+else
+  GPIO->ODR  &=0x00000020;
+delayMs(10);
+}
+}
+
+
+
+
+//for writing and reading I2C
+void i2c_init(void)
+{
+
+RCC->AHB1ENR |=2;
+RCC->APB1ENR |=0X00200000;   // Enabling the clock
+
+//THIS ARE NECESSARY....
+GPIOB->MODER    &= ~0X000F0000;         //PB8,9 use alternate function
+GPIOB->MODER    |= 0X000A0000; 
+
+GPIOB->AFR[1]    &= ~0X000000FF;         //set alternate function as i2c
+GPIOB->AFR[1]    |= 0X00000044;
+
+
+//THIS TWO ARE NOT NECESSARY.. IT DEPENDS
+GPIOB->OTYPER    |=  0X00000300;            //set as open drain
+
+GPIOB->PUPDR    &=  ~0X000F0000;             //pull-ups
+GPIOB->PUPDR    |=  0X00050000; 
+
+
+//I2C config
+I2C1->CR1     = 0X8000;         //SOFTWARE RESET
+I2C1->CR1     &= ~0X8000; 
+I2C1->CR2     = 0X0010;        
+I2C1->CCR     = 80;            //standard mode,100KHZ clock
+I2C1->TRISE   = 17;            //MX RISE TIME
+I2C1->CR1     |=0X0001; 
+}
+
+
+
+int i2c_readbyte(char saddr,char maddr, char* data)
+{
+volatile int temp;
+while (I2C1->SR2 & 2) {}   //	making sure that the bus is not busy
+
+I2C1->CR1   |=0X100;    //START
+while(!(I2C1->SR1 & 1)) {};
+
+I2C1->DR = saddr << 1;
+while(!(I2C1->SR1 & 2)) {};
+temp = I2C1->SR2;
+
+while(!(I2C1->SR1 & 0x80)) {};
+I2C1->DR = maddr;
+while(!(I2C1->SR1 & 0x80)) {};
+
+I2C1->CR1   |=0X100;
+while(!(I2C1->SR1 & 1)) {};
+I2C1->DR = saddr << 1 | 1;
+
+while(!(I2C1->SR1 & 2)) {};
+I2C1->CR1   &= ~0X400;
+temp = I2C1->SR2;
+
+I2C1->CR1 |=0X200;
+
+   while(!(I2C1->SR1 & 0x40)){};
+  *data++ = I2C1->DR;
+return 0;
+}
+
+
+
+
+void delayMs(int n)
+{
+for (;n>0;n--)
+  {
+  for (int i=0;i<3195;i++);
+  }
+}      
