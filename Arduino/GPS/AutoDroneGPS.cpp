@@ -17,6 +17,10 @@ void initializeWire(void)
 	Wire.begin(AUTODRONE_I2C_ADDRESS);
 	Wire.onRequest(writeToMaster);
 	Wire.onReceive(readFromMaster);
+
+  #ifdef DEBUG_EN
+  Serial.println("Wire Initialized");
+  #endif
 }
 
 void floatToByte(float input,byte* buff)
@@ -27,6 +31,13 @@ void floatToByte(float input,byte* buff)
 	{
 		buff[i] = *(intermediate+i);
 	}
+
+  #ifdef DEBUG_EN
+  Serial.print("F2B Conv");
+  Serial.print(input,6);
+  Serial.print(",");
+  Serial.println(*buff);
+  #endif
 }
 
 void feedGPSData(char c)
@@ -60,6 +71,11 @@ void readFromMaster(int bytecount)
 	while(1<Wire.available())
 	{
 		requested_register=(int)Wire.read();
+
+    #ifdef DEBUG_EN
+    Serial.print("I2C Read:");
+    Serial.println(requested_register);
+    #endif
 	}
 	int val = Wire.read();
 }
