@@ -1,8 +1,75 @@
 #include "msp.h"
 #include <ti/devices/msp432p4xx/driverlib/driverlib.h>
 
+char message[10];
 
-char message[] = "Hello\r\n";
+enum regCounts
+{
+    REG_COUNT_GPS=7,
+    REG_COUNT_IMU=5
+};
+
+enum subSystemAddress
+{
+    SUBSYSTEM_COUNT = 2,
+    SUBSYSTEM_ADDRESS_GPS_0 = 0x21,
+    SUBSYSTEM_ADDRESS_IMU_0 = 0x11
+};
+
+const uint8_t subSystemRequestOrder[SUBSYSTEM_COUNT] = {SUBSYSTEM_ADDRESS_GPS_0,SUBSYSTEM_ADDRESS_IMU_0};
+const uint8_t subSystemRegisterCount[SUBSYSTEM_COUNT] = {REG_COUNT_GPS,REG_COUNT_IMU};
+
+enum gpsRegs
+{
+    GPS_SATS=1,
+    GPS_LATITUDE=2,
+    GPS_LONGITUDE=3,
+    GPS_ALTITUDE=4,
+    GPS_H_ACCURACY=5,
+    GPS_V_ACCURACY=6,
+    GPS_REFRESH_RATE=7
+};
+
+enum imuRegs
+{
+    IMU_SUBSYSTEM_TYPE=1,
+    IMU_X_AXIS=2,
+    IMU_Y_AXIS=3,
+    IMU_Z_AXIS=4,
+    IMU_REFRESH_RATE=5
+};
+
+const uint8_t subSystemRegisterOrder[10][10] = { {GPS_SATS,GPS_LATITUDE,GPS_LONGITUDE,GPS_ALTITUDE,GPS_H_ACCURACY,GPS_V_ACCURACY,GPS_REFRESH_RATE},
+                                                 {IMU_SUBSYSTEM_TYPE,IMU_X_AXIS,IMU_Y_AXIS,IMU_Z_AXIS,IMU_REFRESH_RATE} };
+const uint8_t subSystemRegisterSize[10][10] = { { 1,4,4,4,4,4,4}, {1,4,4,4,4} };
+
+struct gpsDATA
+{
+    uint8_t sats_connected;
+    float latitude;
+    float longitude;
+    float altitude;
+    float h_accuracy;
+    float v_accuracy;
+    float refresh_rate;
+};
+
+struct gpsDATA gps;
+
+struct imuData
+{
+    uint8_t subsystem_type;
+    float xaxis;
+    float yaxis;
+    float zaxis;
+    float refresh_rate;
+};
+
+struct imuData imu;
+
+uint8_t RXData[4] = {0};
+uint8_t RXDataPointer;
+uint8_t i2CRequestSize = 0;
 
 void GPIO_init(void)
 {
@@ -78,23 +145,109 @@ void I2C_init(void)
 {
     P1->SEL0 |= BIT6 | BIT7;
 
+    NVIC->IP[5] = (NVIC->IP[5]&0xFFFFFF00)|0x00000060;
     NVIC->ISER[0] = 1 << ((EUSCIB0_IRQn) & 31);
 
     EUSCI_B0->CTLW0 |= EUSCI_A_CTLW0_SWRST;
     EUSCI_B0->CTLW0 = EUSCI_A_CTLW0_SWRST | EUSCI_B_CTLW0_MODE_3 | EUSCI_B_CTLW0_MST | EUSCI_B_CTLW0_SYNC | EUSCI_B_CTLW0_SSEL__SMCLK;
     EUSCI_B0->CTLW1 |= EUSCI_B_CTLW1_ASTP_2;
+    EUSCI_B0->BRW = 7;
+    EUSCI_B0->TBCNT = 0x0001;
+    EUSCI_B0->CTLW0 &= ~EUSCI_B_CTLW0_SWRST;
 
+    EUSCI_B0->IE |= EUSCI_A_IE_RXIE | EUSCI_B_IE_NACKIE;
+
+}
+
+void I2C_Request(uint8_t slaveAddress, uint8_t registerAddress, uint8_t byteCount)
+{
+    EUSCI_B0->I2CSA = slaveAddress;
+
+    while (EUSCI_B0->CTLW0 & EUSCI_B_CTLW0_TXSTP);
+
+    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_TR | EUSCI_B_CTLW0_TXSTT;
+
+    EUSCI_B0->TXBUF = registerAddress;
+    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_TXSTP;
+
+    EUSCI_B0->TBCNT = byteCount;
+    EUSCI_B0->CTLW0 &= ~EUSCI_B_CTLW0_TR;
+    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_TXSTT;
+}
+
+float byteStreamToFloat(uint8_t * data)
+{
+    float *temp;
+    temp = (float*)data;
+    return *temp;
 }
 
 void TA2_0_IRQHandler(void)
 {
-    TIMER_A2->CCTL[0] &= ~0x0001;
-    int i;
+
+    int i,j;
+
+    for( i= 0; i < SUBSYSTEM_COUNT; i++)
+    {
+        for ( j = 0; j < subSystemRegisterCount[i]; j++)
+        {
+            i2CRequestSize = subSystemRegisterSize[i][j];
+            I2C_Request(subSystemRequestOrder[i], subSystemRegisterOrder[i][j], i2CRequestSize);
+
+            while (EUSCI_B0->CTLW0 & EUSCI_B_CTLW0_TXSTP);
+
+            switch(subSystemRequestOrder[i])
+            {
+            case SUBSYSTEM_ADDRESS_GPS_0: switch(subSystemRegisterOrder[i][j])
+                                          {
+                                             case GPS_SATS: gps.sats_connected = RXData[0];
+                                             break;
+
+                                             case GPS_LATITUDE: gps.latitude = byteStreamToFloat(&RXData);
+                                             break;
+
+                                             case GPS_LONGITUDE: gps.longitude = byteStreamToFloat(&RXData);
+                                             break;
+
+                                             case GPS_ALTITUDE: gps.altitude = byteStreamToFloat(&RXData);
+                                             break;
+
+                                             case GPS_H_ACCURACY: gps.h_accuracy = byteStreamToFloat(&RXData);
+                                             break;
+
+                                             case GPS_V_ACCURACY: gps.v_accuracy = byteStreamToFloat(&RXData);
+                                             break;
+
+                                             case GPS_REFRESH_RATE: gps.refresh_rate = byteStreamToFloat(&RXData);
+                                             break;
+                                          }
+            case SUBSYSTEM_ADDRESS_IMU_0 : switch(subSystemRegisterOrder[i][j])
+                                           {
+                                             case IMU_SUBSYSTEM_TYPE: imu.subsystem_type = RXData[0];
+                                             break;
+
+                                             case IMU_X_AXIS: imu.xaxis = byteStreamToFloat(&RXData);
+                                             break;
+
+                                             case IMU_Y_AXIS: imu.yaxis = byteStreamToFloat(&RXData);
+                                             break;
+
+                                             case IMU_Z_AXIS: imu.zaxis = byteStreamToFloat(&RXData);
+                                             break;
+
+                                             case IMU_REFRESH_RATE: imu.refresh_rate = byteStreamToFloat(&RXData);
+                                             break;
+                                           }
+            }
+        }
+    }
+
     for (i = 0; i < 7; i++)
             {
                 while(!(EUSCI_A0->IFG & 0x02)) { }                          // wait for transmit buffer empty
                 EUSCI_A0->TXBUF = message[i];                             //send a char
             }
+    TIMER_A2->CCTL[0] &= ~0x0001;
 }
 
 void EUSCIB0_IRQHandler(void)
@@ -113,14 +266,10 @@ void EUSCIB0_IRQHandler(void)
         // Get RX data
         RXData[RXDataPointer++] = EUSCI_B0->RXBUF;
 
-        if (RXDataPointer > sizeof(RXData))
+        if (RXDataPointer >= i2CRequestSize)
         {
             RXDataPointer = 0;
         }
-    }
-    if (EUSCI_B0->IFG & EUSCI_B_IFG_BCNTIFG)
-    {
-        EUSCI_B0->IFG &= ~ EUSCI_B_IFG_BCNTIFG;
     }
 }
 
