@@ -1,7 +1,9 @@
 #include "msp.h"
 #include <ti/devices/msp432p4xx/driverlib/driverlib.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-char message[10];
+char message[50];
 
 enum regCounts
 {
@@ -70,6 +72,47 @@ struct imuData imu;
 uint8_t RXData[4] = {0};
 uint8_t RXDataPointer;
 uint8_t i2CRequestSize = 0;
+bool isBusBusy = false;
+
+int intToASCII(int input, char *buffer)
+{
+    int i,j;
+    char *temp;
+
+    temp = malloc(3);
+
+    for(i=0;input>0;i++)
+    {
+        temp[i] = (char)((input%10)+48);
+        input /= 10;
+    }
+
+    for(j=0;i>=0;j++,i--)
+    {
+        buffer[j]=temp[i];
+    }
+
+    free(temp);
+
+    return j;
+}
+
+void sendUART0(int cnt, char *msg)
+{
+    int i;
+
+    for (i = 0; i < cnt; i++)
+        {
+            while(!(EUSCI_A0->IFG & 0x02)) { }                          // wait for transmit buffer empty
+            EUSCI_A0->TXBUF = msg[i];                             //send a char
+        }
+}
+
+void sendUART0_Char(char a)
+{
+    while(!(EUSCI_A0->IFG & 0x02)) { }
+    EUSCI_A0->TXBUF = a;
+}
 
 void GPIO_init(void)
 {
@@ -130,6 +173,32 @@ void Clocks_init(void)
 
 }
 
+void I2C_Handler(void)
+{
+    //sendUART0(7,"I2C IRQ");
+
+    if (EUSCI_B0->IFG & EUSCI_B_IFG_NACKIFG)
+    {
+        EUSCI_B0->IFG &= ~ EUSCI_B_IFG_NACKIFG;
+
+        // I2C start condition
+        EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_TXSTT;
+    }
+    else if (EUSCI_B0->IFG & EUSCI_B_IFG_RXIFG0)
+    {
+        EUSCI_B0->IFG &= ~ EUSCI_B_IFG_RXIFG0;
+
+        // Get RX data
+        RXData[RXDataPointer++] = EUSCI_B0->RXBUF;
+
+        if (RXDataPointer >= i2CRequestSize)
+        {
+            RXDataPointer = 0;
+            isBusBusy=false;
+        }
+    }
+}
+
 void UART2_init(void)
 {
     EUSCI_A0->CTLW0 |= 1;                               // put in reset mode for config
@@ -145,11 +214,11 @@ void I2C_init(void)
 {
     P1->SEL0 |= BIT6 | BIT7;
 
-    NVIC->IP[5] = (NVIC->IP[5]&0xFFFFFF00)|0x00000060;
-    NVIC->ISER[0] = 1 << ((EUSCIB0_IRQn) & 31);
+    //NVIC->IP[5] = (NVIC->IP[5]&0xFFFFFF00)|0x00000060;
+    //NVIC->ISER[0] = 1 << ((EUSCIB0_IRQn) & 31);
 
-    EUSCI_B0->CTLW0 |= EUSCI_A_CTLW0_SWRST;
-    EUSCI_B0->CTLW0 = EUSCI_A_CTLW0_SWRST | EUSCI_B_CTLW0_MODE_3 | EUSCI_B_CTLW0_MST | EUSCI_B_CTLW0_SYNC | EUSCI_B_CTLW0_SSEL__SMCLK;
+    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_SWRST;
+    EUSCI_B0->CTLW0 = EUSCI_B_CTLW0_SWRST | EUSCI_B_CTLW0_MODE_3 | EUSCI_B_CTLW0_MST | EUSCI_B_CTLW0_SYNC | EUSCI_B_CTLW0_SSEL__SMCLK;
     EUSCI_B0->CTLW1 |= EUSCI_B_CTLW1_ASTP_2;
     EUSCI_B0->BRW = 7;
     EUSCI_B0->TBCNT = 0x0001;
@@ -161,7 +230,25 @@ void I2C_init(void)
 
 void I2C_Request(uint8_t slaveAddress, uint8_t registerAddress, uint8_t byteCount)
 {
+    int temp=0;
+
+    isBusBusy = true;
+    sendUART0(13,"I2C Request\n\r");
+
     EUSCI_B0->I2CSA = slaveAddress;
+
+    sendUART0(14,"Slave Address:");
+    temp = intToASCII(slaveAddress,message);
+
+    sendUART0(temp,message);
+    sendUART0_Char('\t');
+
+    sendUART0(12,"Reg Address:");
+    temp = intToASCII(registerAddress,message);
+
+    sendUART0(temp,message);
+    sendUART0_Char('\r');
+    sendUART0_Char('\n');
 
     while (EUSCI_B0->CTLW0 & EUSCI_B_CTLW0_TXSTP);
 
@@ -170,7 +257,10 @@ void I2C_Request(uint8_t slaveAddress, uint8_t registerAddress, uint8_t byteCoun
     EUSCI_B0->TXBUF = registerAddress;
     EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_TXSTP;
 
+    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_SWRST;
+
     EUSCI_B0->TBCNT = byteCount;
+    EUSCI_B0->CTLW0 &= ~EUSCI_B_CTLW0_SWRST;
     EUSCI_B0->CTLW0 &= ~EUSCI_B_CTLW0_TR;
     EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_TXSTT;
 }
@@ -187,6 +277,8 @@ void TA2_0_IRQHandler(void)
 
     int i,j;
 
+    sendUART0(7,"TA2 IRQ");
+
     for( i= 0; i < SUBSYSTEM_COUNT; i++)
     {
         for ( j = 0; j < subSystemRegisterCount[i]; j++)
@@ -195,6 +287,10 @@ void TA2_0_IRQHandler(void)
             I2C_Request(subSystemRequestOrder[i], subSystemRegisterOrder[i][j], i2CRequestSize);
 
             while (EUSCI_B0->CTLW0 & EUSCI_B_CTLW0_TXSTP);
+            while (isBusBusy)
+            {
+                I2C_Handler();
+            }
 
             switch(subSystemRequestOrder[i])
             {
@@ -242,36 +338,13 @@ void TA2_0_IRQHandler(void)
         }
     }
 
-    for (i = 0; i < 7; i++)
-            {
-                while(!(EUSCI_A0->IFG & 0x02)) { }                          // wait for transmit buffer empty
-                EUSCI_A0->TXBUF = message[i];                             //send a char
-            }
+    int count = snprintf(message,sizeof(message),"Lat:%f\r\nLong:%f\r\n\n",gps.latitude,gps.longitude);
+
+    sendUART0(count, message);
+
     TIMER_A2->CCTL[0] &= ~0x0001;
 }
 
-void EUSCIB0_IRQHandler(void)
-{
-    if (EUSCI_B0->IFG & EUSCI_B_IFG_NACKIFG)
-    {
-        EUSCI_B0->IFG &= ~ EUSCI_B_IFG_NACKIFG;
-
-        // I2C start condition
-        EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_TXSTT;
-    }
-    if (EUSCI_B0->IFG & EUSCI_B_IFG_RXIFG0)
-    {
-        EUSCI_B0->IFG &= ~ EUSCI_B_IFG_RXIFG0;
-
-        // Get RX data
-        RXData[RXDataPointer++] = EUSCI_B0->RXBUF;
-
-        if (RXDataPointer >= i2CRequestSize)
-        {
-            RXDataPointer = 0;
-        }
-    }
-}
 
 void TimerA2_Init()
 {
@@ -292,11 +365,14 @@ int main(void)
     I2C_init();
     TimerA2_Init();
 
+    sendUART0(10,"Main Begin");
+
     MAP_Interrupt_enableSleepOnIsrExit();
     __enable_interrupts();
 
     while (1)
     {
+        sendUART0(5,"Sleep");
         MAP_PCM_gotoLPM3();
     }
 }
