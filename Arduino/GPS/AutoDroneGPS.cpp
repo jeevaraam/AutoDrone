@@ -54,8 +54,8 @@ void updateGPS(void)
 		unsigned long age;
 		int sats=0;
 		gps.f_get_position(&flat,&flong,&age);
-		flat=(flat==TinyGPS::GPS_INVALID_F_ANGLE ? 0.0 : flat);
-		flong=(flong==TinyGPS::GPS_INVALID_F_ANGLE ? 0.0 : flong);
+		flat=(flat==TinyGPS::GPS_INVALID_F_ANGLE ? 9.9 : flat);
+		flong=(flong==TinyGPS::GPS_INVALID_F_ANGLE ? 9.9 : flong);
 		sats = (gps.satellites() == TinyGPS::GPS_INVALID_SATELLITES ? 0 : gps.satellites());
 		h_acc = (gps.hdop() == TinyGPS::GPS_INVALID_HDOP ? 0 : gps.hdop());
 		floatToByte(flat,latitude);
@@ -68,7 +68,7 @@ void updateGPS(void)
 
 void readFromMaster(int bytecount)
 {
-	while(1<Wire.available())
+	while(Wire.available())
 	{
 		requested_register=(int)Wire.read();
 
